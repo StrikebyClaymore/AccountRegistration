@@ -21,6 +21,7 @@ namespace Core.Scripts
         private PhoneData _userPhoneData;
         private int _registeredUsersCount;
         private const float UpdateRegisteredInterval = 5;
+        private delegate IEnumerator CoroutineSendRequest(string url, Action<string> callback, WWWForm form);
 
         private void Awake()
         {
@@ -28,30 +29,12 @@ namespace Core.Scripts
             ConnectActions();
         }
 
-        private void GetID()
+        private void SendGetIDRequest()
         {
-            StartCoroutine(SendGetIDRequest());
+            StartCoroutine(SendRequest(GetKeyUrl, HandleGetIDResult));
         }
 
-        private IEnumerator SendGetIDRequest()
-        {
-            using UnityWebRequest webRequest = UnityWebRequest.Get(GetKeyUrl);
-            yield return webRequest.SendWebRequest();
-
-            if (webRequest.result == UnityWebRequest.Result.ConnectionError ||
-                webRequest.result == UnityWebRequest.Result.ProtocolError)
-            {
-                Debug.LogError("Error: " + webRequest.error);
-            }
-            else
-            {
-                string responseText = webRequest.downloadHandler.text;
-                Debug.Log("Response: " + responseText);
-                ParseID(responseText);
-            }
-        }
-
-        private void ParseID(string responseText)
+        private void HandleGetIDResult(string responseText)
         {
             KeyContainer keyContainer = JsonConvert.DeserializeObject<KeyContainer>(responseText);
             foreach (var keyItem in keyContainer.Keys)
@@ -72,99 +55,47 @@ namespace Core.Scripts
             _rootUI.ShowMessage("Не удалось получить ID");
         }
         
-        private void CheckUser(PhoneData phoneData)
+        private void SendUserRequest(PhoneData phoneData)
         {
             _userPhoneData = phoneData;
             WWWForm form = new WWWForm();
             form.AddField("ID", _userID);
             form.AddField("Phone", _userPhoneData.FullNumber);
-            StartCoroutine(SendCheckUserForm(form));
+            StartCoroutine(SendRequest(CheckUserUrl, HandleUserResult, form));
         }
-        
-        private IEnumerator SendCheckUserForm(WWWForm form)
+
+        private void HandleUserResult(string responseText)
         {
-            using UnityWebRequest www = UnityWebRequest.Post(CheckUserUrl, form);
-            yield return www.SendWebRequest();
-
-            if (www.result == UnityWebRequest.Result.ConnectionError || www.result == UnityWebRequest.Result.ProtocolError)
+            if (responseText == EResponse.NoExist.ToString())
             {
-                Debug.LogError("Error: " + www.error);
+                WWWForm form = new WWWForm();
+                form.AddField("ID", _secondUserID);
+                form.AddField("Country", _userPhoneData.Country);
+                form.AddField("Operator", _userPhoneData.Operator);
+                form.AddField("Number", _userPhoneData.Number);
+                StartCoroutine(SendRequest(RegUsersUrl, HandleRegisterUser, form));
             }
-            else
+            else if (responseText == EResponse.Exist.ToString())
             {
-                Debug.Log("CheckUser form data sent successfully");
-                string responseText = www.downloadHandler.text;
-                Debug.Log("Server Response: " + responseText);
-
-                if (responseText == "Exist")
-                {
-                    Debug.Log("Пользователь уже зарегестрирован");
-                    _rootUI.ShowMessage("Пользователь уже зарегестрирован");
-                    _rootUI.ShowRegistered();
-                    StartCoroutine(GetRegisteredUsers());
-                }
-                else if (responseText == "NoExist")
-                {
-                    StartCoroutine(RegisterUser());
-                }
+                Debug.Log("Пользователь уже зарегестрирован");
+                _rootUI.ShowMessage("Пользователь уже зарегестрирован");
+                _rootUI.ShowRegistered();
+                StartCoroutine(SendRequest(HowManyUrl, HandleRegisteredList));
             }
         }
 
-        private IEnumerator RegisterUser()
+        private void HandleRegisterUser(string responseText)
         {
-            WWWForm form = new WWWForm();
-            form.AddField("ID", _secondUserID);
-            form.AddField("Country", _userPhoneData.Country);
-            form.AddField("Operator", _userPhoneData.Operator);
-            form.AddField("Number", _userPhoneData.Number);
-            
-            using UnityWebRequest www = UnityWebRequest.Post(RegUsersUrl, form);
-            yield return www.SendWebRequest();
-            
-            if (www.result == UnityWebRequest.Result.ConnectionError || www.result == UnityWebRequest.Result.ProtocolError)
+            if (responseText == EResponse.RegOK.ToString())
             {
-                Debug.LogError("Error: " + www.error);
-            }
-            else
-            {
-                Debug.Log("RegisterUser form data sent successfully");
-                string responseText = www.downloadHandler.text;
-                Debug.Log("Server Response: " + responseText);
-
-                if (responseText == "RegOK")
-                {
-                    Debug.Log("Пользователь зарегестрирован");
-                    _rootUI.ShowMessage("Пользователь зарегестрирован");
-                    _rootUI.ShowRegistered();
-                    StartCoroutine(GetRegisteredUsers());
-                }
+                Debug.Log("Пользователь зарегестрирован");
+                _rootUI.ShowMessage("Пользователь зарегестрирован");
+                _rootUI.ShowRegistered();
+                StartCoroutine(SendRequest(HowManyUrl, HandleRegisteredList));
             }
         }
         
-        private IEnumerator GetRegisteredUsers()
-        {
-            while (true)
-            {
-                using UnityWebRequest webRequest = UnityWebRequest.Get(HowManyUrl);
-                yield return webRequest.SendWebRequest();
-
-                if (webRequest.result == UnityWebRequest.Result.ConnectionError ||
-                    webRequest.result == UnityWebRequest.Result.ProtocolError)
-                {
-                    Debug.LogError("Error: " + webRequest.error);
-                }
-                else
-                {
-                    string responseText = webRequest.downloadHandler.text;
-                    Debug.Log("Response: " + responseText);
-                    ParseUsers(responseText);
-                }
-
-                yield return new WaitForSeconds(UpdateRegisteredInterval);
-            }
-        }
-        
-        private void ParseUsers(string responseText)
+        private void HandleRegisteredList(string responseText)
         {
             var oldCount = _registeredUsersCount;
             if (int.TryParse(responseText, out _registeredUsersCount))
@@ -174,12 +105,37 @@ namespace Core.Scripts
                     _rootUI.AddNewRegistered();
                 }
             }
+
+            StartCoroutine(CoroutineWait(UpdateRegisteredInterval, SendRequest, HowManyUrl));
+        }
+
+        private IEnumerator SendRequest(string url, Action<string> callbackAction = null, WWWForm form = null)
+        {
+            using UnityWebRequest www = UnityWebRequest.Post(url, form);
+            yield return www.SendWebRequest();
+
+            if (www.result == UnityWebRequest.Result.ConnectionError || www.result == UnityWebRequest.Result.ProtocolError)
+            {
+                Debug.LogError("Error: " + www.error);
+            }
+            else
+            {
+                string responseText = www.downloadHandler.text;
+                Debug.Log("Server Response: " + responseText);
+                callbackAction?.Invoke(responseText);
+            }
+        }
+
+        private IEnumerator CoroutineWait(float waitTime, CoroutineSendRequest waitCoroutine, string url, Action<string> callback = null, WWWForm form = null)
+        {
+            yield return new WaitForSeconds(waitTime);
+            StartCoroutine(waitCoroutine(url, callback, form));
         }
         
         private void ConnectActions()
         {
-            _rootUI.OnGetIDPressed += GetID;
-            _rootUI.OnRegistrationPressed += CheckUser;
+            _rootUI.OnGetIDPressed += SendGetIDRequest;
+            _rootUI.OnRegistrationPressed += SendUserRequest;
         }
     }
 }
