@@ -21,6 +21,7 @@ namespace Core.Scripts
         private PhoneData _userPhoneData;
         private int _registeredUsersCount;
         private const float UpdateRegisteredInterval = 5;
+        private bool _waitUpdateRegistered;
         private delegate IEnumerator CoroutineSendRequest(string url, Action<string> callback, WWWForm form);
 
         private void Awake()
@@ -80,7 +81,7 @@ namespace Core.Scripts
                 Debug.Log("Пользователь уже зарегестрирован");
                 _rootUI.ShowMessage("Пользователь уже зарегестрирован");
                 _rootUI.ShowRegistered();
-                StartCoroutine(SendRequest(HowManyUrl, HandleRegisteredList));
+                StartUpdateRegistered();
             }
         }
 
@@ -91,10 +92,18 @@ namespace Core.Scripts
                 Debug.Log("Пользователь зарегестрирован");
                 _rootUI.ShowMessage("Пользователь зарегестрирован");
                 _rootUI.ShowRegistered();
-                StartCoroutine(SendRequest(HowManyUrl, HandleRegisteredList));
+                StartUpdateRegistered();
             }
         }
-        
+
+        private void StartUpdateRegistered()
+        {
+            if (_waitUpdateRegistered)
+                return;
+            StartCoroutine(SendRequest(HowManyUrl, HandleRegisteredList));
+            _waitUpdateRegistered = true;
+        }
+
         private void HandleRegisteredList(string responseText)
         {
             var oldCount = _registeredUsersCount;
@@ -105,8 +114,8 @@ namespace Core.Scripts
                     _rootUI.AddNewRegistered();
                 }
             }
-
-            StartCoroutine(CoroutineWait(UpdateRegisteredInterval, SendRequest, HowManyUrl));
+            
+            StartCoroutine(CoroutineWait(UpdateRegisteredInterval, SendRequest, HowManyUrl, HandleRegisteredList));
         }
 
         private IEnumerator SendRequest(string url, Action<string> callbackAction = null, WWWForm form = null)
